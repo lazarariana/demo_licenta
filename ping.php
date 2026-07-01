@@ -6,9 +6,10 @@ function parse_host($input) {
 }
 
 function run_ping($host) {
-    $output = shell_exec("ping -c 1 " . $host);
+    $safe_host = escapeshellarg($host);
+    $output    = shell_exec("ping -c 1 " . $safe_host);
 
-    render("<pre>" . $host . ": " . $output . "</pre>");
+    render("<pre>" . htmlspecialchars($host, ENT_QUOTES, 'UTF-8') . ": " . $output . "</pre>");
 }
 
 function handle_ping() {
