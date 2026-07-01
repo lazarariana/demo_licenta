@@ -1,0 +1,85 @@
+name: SAST Security Gate
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: lazarariana/sast
+          path: sast
+          token: ${{ secrets.SAST_TOKEN }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      
+      - name: Cache .NET build
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-dotnet-${{ hashFiles('sast/**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-dotnet-
+
+      - name: Build
+        run: |
+          dotnet publish sast/sast.csproj \
+            --nologo \
+            -c Release \
+            -r linux-x64 \
+            --self-contained false \
+            -o ./publish
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: php-analyzer-bin
+          path: ./publish/
+          retention-days: 1
+
+  sast:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: php-analyzer-bin
+          path: ./bin
+
+      - name: Scan
+        run: |
+          chmod +x ./bin/sast
+          ./bin/sast scan "$GITHUB_WORKSPACE" \
+            --no-save \
+            --sarif sast.sarif
+        continue-on-error: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: sast.sarif
+          category: phpanalyzer
+
+      - name: Diff Check
+        if: >
+          github.event_name == 'push' &&
+          github.event.before != '0000000000000000000000000000000000000000'
+        run: |
+          report=$(./bin/sast diff "$GITHUB_WORKSPACE" \
+            "${{ github.event.before }}" \
+            "${{ github.sha }}" 2>&1)
+          printf '%s\n' "$report"
+          printf '%s\n' "$report" | grep -Eq '\[NEW\][[:space:]]+\[ERROR' && exit 1 || exit 0
